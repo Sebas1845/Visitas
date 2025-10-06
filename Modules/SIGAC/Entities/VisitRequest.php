@@ -3,19 +3,11 @@
 namespace Modules\SIGAC\Entities;
 
 use Illuminate\Database\Eloquent\Model;
-use OwenIt\Auditing\Contracts\Auditable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
-use Modules\SICA\Entities\Person;
-use app\Models\User;
 
-/**
- * Modelo VisitRequest
- *
- * Gestiona las solicitudes de visita realizadas por instructores, coordinación o bienestar.
- */
-class VisitRequest extends Model implements Auditable
+class VisitRequest extends Model
 {
-    use \OwenIt\Auditing\Auditable, HasFactory;
+    use HasFactory;
 
     protected $table = 'visit_requests';
 
@@ -29,44 +21,54 @@ class VisitRequest extends Model implements Auditable
         'state',
         'number_of_people',
         'people_list_path',
-        'attachments_path',
         'observations',
+
+        // NUEVOS
+        'contact_name',
+        'contact_phone',
+        'contact_email',
+        'type',                   // 'visita' | 'practica'
+        'practice_requirements',  // nullable
     ];
 
-    protected $hidden = [
-        'created_at',
-        'updated_at',
+    protected $casts = [
+        'date_received' => 'date',
+        'response_date' => 'date',
+        'number_of_people' => 'integer',
+        'created_at' => 'datetime',
+        'updated_at' => 'datetime',
     ];
 
-    /**
-     * Relación con la empresa
-     */
+    /* Relaciones */
     public function company()
     {
-        return $this->belongsTo(Company::class);
+        return $this->belongsTo(\Modules\SIGAC\Entities\Company::class, 'company_id');
     }
 
-    /**
-     * Relación con la persona que realiza la solicitud
-     */
     public function person()
     {
-        return $this->belongsTo(Person::class);
+        // Relacionado con módulo SICA
+        return $this->belongsTo(\Modules\SICA\Entities\Person::class, 'person_id');
     }
 
-    /**
-     * Relación con el usuario que registra la solicitud
-     */
     public function user()
     {
-        return $this->belongsTo(User::class);
+        return $this->belongsTo(\App\Models\User::class, 'user_id');
     }
 
-    /**
-     * Relación con las agendas de la visita
-     */
     public function schedules()
     {
-        return $this->hasMany(VisitSchedule::class);
+        return $this->hasMany(\Modules\SIGAC\Entities\VisitSchedule::class, 'visit_request_id');
+    }
+
+    /* Scopes útiles (opcionales) */
+    public function scopeType($q, string $type)
+    {
+        return $q->where('type', $type);
+    }
+
+    public function scopePending($q)
+    {
+        return $q->where('state', 'Sin agendar');
     }
 }

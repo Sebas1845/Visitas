@@ -7,20 +7,36 @@
         </div>
 
         <div class="card-body">
-            {!! Form::open(['route' => 'sigac.academic_coordination.visitschedule.store', 'method' => 'POST', 'id' => 'visit-form']) !!}
+            {!! Form::open([
+                'route' => 'sigac.academic_coordination.visitschedule.store',
+                'method' => 'POST',
+                'id' => 'visit-form',
+            ]) !!}
             @csrf
 
             {{-- ID de la solicitud --}}
             {!! Form::hidden('visit_request_id', $request->id) !!}
 
             <div class="row">
+                {{-- Encargado: buscador por nombre + select dinámico (vacío al inicio) --}}
                 <div class="col-6 mb-3">
                     {!! Form::label('person_in_charge_id', 'Encargado') !!}
-                    {!! Form::select('person_in_charge_id', $persons, null, [
+
+                    <input type="text" id="person_search" class="form-control form-control-sm mb-2"
+                        placeholder="Buscar encargado por nombre (mín. 2 caracteres)…">
+
+                    {!! Form::select('person_in_charge_id', [], null, [
                         'class' => 'form-control',
-                        'placeholder' => 'Seleccione...',
+                        'id' => 'person_in_charge_id',
+                        'placeholder' => 'Escribe para buscar…',
+                        'disabled' => true,
                     ]) !!}
+
+                    <small id="person_helper" class="form-text text-muted">
+                        Empieza a escribir el nombre para buscar.
+                    </small>
                 </div>
+
 
                 <div class="col-6 mb-3">
                     {!! Form::label('activity', 'Actividad a realizar') !!}
@@ -76,14 +92,120 @@
     </div>
 
     <script>
-        (function () {
-            const date      = document.getElementById('date');
+        (function() {
+            const personInput = document.getElementById('person_search');
+            const personSelect = document.getElementById('person_in_charge_id');
+            const personHelper = document.getElementById('person_helper');
+            const token = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
+            const urlPersons = "{{ route('sigac.academic_coordination.persons.search') }}";
+
+            let lastController = null;
+            let debounceTimer = null;
+
+            function setPersonLoading(state) {
+                personSelect.innerHTML = '';
+                personSelect.disabled = true;
+
+                const opt = document.createElement('option');
+                opt.value = '';
+                opt.textContent = state ? 'Buscando…' : 'Escribe para buscar…';
+                personSelect.appendChild(opt);
+
+                personHelper.textContent = state ?
+                    'Buscando encargados…' :
+                    'Empieza a escribir el nombre para buscar.';
+            }
+
+            function renderPersons(list) {
+                personSelect.innerHTML = '';
+                if (!Array.isArray(list) || list.length === 0) {
+                    const o = document.createElement('option');
+                    o.value = '';
+                    o.textContent = '-- Sin resultados --';
+                    personSelect.appendChild(o);
+                    personSelect.disabled = true;
+                    personHelper.textContent = 'No se encontraron coincidencias.';
+                    return;
+                }
+
+                const ph = document.createElement('option');
+                ph.value = '';
+                ph.textContent = 'Seleccione un encargado…';
+                personSelect.appendChild(ph);
+
+                list.forEach(p => {
+                    const opt = document.createElement('option');
+                    opt.value = p.id;
+                    opt.textContent = p.name;
+                    personSelect.appendChild(opt);
+                });
+
+                personSelect.disabled = false;
+                personHelper.textContent = `${list.length} resultado(s).`;
+            }
+
+            async function searchPersons(q) {
+                // Cancela petición anterior si aún está en curso
+                if (lastController) lastController.abort();
+                lastController = new AbortController();
+
+                try {
+                    const res = await fetch(urlPersons, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRF-TOKEN': token
+                        },
+                        body: JSON.stringify({
+                            q
+                        }),
+                        signal: lastController.signal
+                    });
+
+                    if (!res.ok) throw new Error('HTTP ' + res.status);
+                    const data = await res.json();
+                    renderPersons(data);
+                } catch (e) {
+                    if (e.name === 'AbortError') return; // fue cancelado por una nueva búsqueda
+                    personSelect.innerHTML = '';
+                    const o = document.createElement('option');
+                    o.value = '';
+                    o.textContent = '-- Error al buscar --';
+                    personSelect.appendChild(o);
+                    personSelect.disabled = true;
+                    personHelper.textContent = 'No se pudo completar la búsqueda. Intente de nuevo.';
+                }
+            }
+
+            personInput.addEventListener('input', () => {
+                const q = personInput.value.trim();
+                if (q.length < 2) {
+                    setPersonLoading(false);
+                    return;
+                }
+
+                setPersonLoading(true);
+
+                // debounce 300 ms
+                clearTimeout(debounceTimer);
+                debounceTimer = setTimeout(() => {
+                    searchPersons(q);
+                }, 300);
+            });
+
+            // Estado inicial
+            setPersonLoading(false);
+        })();
+
+
+        (function() {
+            const date = document.getElementById('date');
             const startTime = document.getElementById('start_time');
-            const endTime   = document.getElementById('end_time');
+            const endTime = document.getElementById('end_time');
             const envSelect = document.getElementById('environment_id');
             const submitBtn = document.getElementById('submitBtn');
-            const helper    = document.getElementById('env-helper');
-            const token     = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
+            const helper = document.getElementById('env-helper');
+            const token = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
 
             const url = "{{ route('sigac.academic_coordination.visit.environments.search') }}";
 
@@ -134,7 +256,11 @@
                             'Content-Type': 'application/json',
                             'X-CSRF-TOKEN': token
                         },
-                        body: JSON.stringify({ date: d, start_time: s, end_time: e })
+                        body: JSON.stringify({
+                            date: d,
+                            start_time: s,
+                            end_time: e
+                        })
                     });
 
                     if (!res.ok) {
@@ -164,7 +290,8 @@
 
                     envSelect.disabled = false;
                     submitBtn.disabled = true; // hasta que elija uno
-                    helper.textContent = 'Solo se listan ambientes libres para la fecha y el rango horario indicados.';
+                    helper.textContent =
+                        'Solo se listan ambientes libres para la fecha y el rango horario indicados.';
                 } catch (err) {
                     console.error(err);
                     setEmpty('No se pudieron cargar los ambientes. Intente de nuevo.');

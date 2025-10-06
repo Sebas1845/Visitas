@@ -299,15 +299,24 @@ Route::middleware(['lang'])->group(function () { //Middleware que permite la int
             Route::get('academic_coordination/visit-request/index', 'application_index')->name('sigac.academic_coordination.visitrequest.index');
             Route::get('academic_coordination/visit-request/create', 'application_create')->name('sigac.academic_coordination.visitrequest.create');
             Route::post('academic_coordination/visit-request/store', 'application_store')->name('sigac.academic_coordination.visitrequest.store');
+            Route::post('academic_coordination/visit-request/update', 'application_update')->name('sigac.academic_coordination.visitrequest.update');
 
         });
 
         //Agendar Visitas
         Route::controller(VisitScheduleController::class)->group(function () {
-
+            Route::get('academic_coordination/visit-schedule/events', 'events')->name('sigac.academic_coordination.visitschedule.events');
             Route::get('academic_coordination/visit-schedule/create/{request}', 'create')->name('sigac.academic_coordination.visitschedule.create');
             Route::post('academic_coordination/visit-schedule/store', 'store')->name('sigac.academic_coordination.visitschedule.store');
             Route::post('academic_coordination/visit/environments/search','available_environments')->name('sigac.academic_coordination.visit.environments.search');
+            Route::post('academic_coordination/persons/search','searchPersons')->name('sigac.academic_coordination.persons.search');
+            Route::get('academic_coordination/visit-schedule/calendar/{request}', 'calendar') ->name('sigac.academic_coordination.visitschedule.calendar');
+            Route::get('academic_coordination/visit-schedule/events/{request}', 'eventsByRequest')->name('sigac.academic_coordination.visitschedule.events.byrequest');
+            Route::get('academic_coordination/visit-schedule/calendar', 'calendarAll')->name('sigac.academic_coordination.visitschedule.calendar.general');
+            Route::get('academic_coordination/visit-schedule/events', 'eventsAll')->name('sigac.academic_coordination.visitschedule.events.all');
+            Route::get('academic_coordination/visit-schedule/{schedule}/ics','downloadIcs')->name('sigac.academic_coordination.visitschedule.ics');
+            Route::post('academic_coordination/visit-request/{visit}/notify', 'notify')->name('sigac.academic_coordination.visitrequest.notify');
+
         });
     });
-});
+});    

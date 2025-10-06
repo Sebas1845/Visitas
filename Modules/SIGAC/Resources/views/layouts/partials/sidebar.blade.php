@@ -158,10 +158,10 @@
                                         </a>
                                     </li>
                                 @endif
-                                @if (Auth::user()->havePermission('sigac.academic_coordination.visitrequest.index'))
+                                @if (Auth::user()->havePermission('sigac.academic_coordination.visitschedule.calendar.general'))
                                     <li class="nav-item">
-                                        <a href="{{--route('sigac.academic_coordination.visitrequest.index') --}}"
-                                            class="nav-link {{ Route::is('sigac.academic_coordination.visitrequest.*') ? 'active' : '' }}">
+                                        <a href="{{route('sigac.academic_coordination.visitschedule.calendar.general') }}"
+                                            class="nav-link {{ Route::is('sigac.academic_coordination.visitschedule.*') ? 'active' : '' }}">
                                             <i class="nav-icon fas fa-list"></i>
                                             <p>Calendario</p>
                                         </a>

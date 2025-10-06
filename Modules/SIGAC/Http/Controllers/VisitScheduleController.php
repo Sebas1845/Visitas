@@ -11,6 +11,16 @@ use Modules\SICA\Entities\Environment;
 use Modules\SIGAC\Entities\InstructorProgram;
 use Modules\SIGAC\Entities\EnvironmentInstructorProgram;
 use Modules\SICA\Entities\ClassEnvironment;
+use Illuminate\Support\Str;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Carbon;
+use App\Support\IcsBuilder;
+use Symfony\Component\HttpFoundation\StreamedResponse;
+use App\Mail\VisitScheduledMail; 
+use Illuminate\Support\Facades\Mail;
+
+
+
 
 
 
@@ -49,6 +59,32 @@ class VisitScheduleController extends Controller
         ]);
     }
 
+    public function searchPersons(Request $request)
+    {
+        $q = (string) $request->input('q', '');
+        if (Str::length(trim($q)) < 2) {
+            return response()->json([]); // mín imo 2 caracteres
+        }
+
+        // Normaliza acentos para búsquedas más tolerantes (opcional si tu collation ya maneja acentos)
+        $needle = '%' . str_replace(' ', '%', $q) . '%';
+
+        $persons = Person::query()
+            ->select('id', DB::raw("CONCAT_WS(' ', first_name, first_last_name, COALESCE(second_last_name,'')) AS name"))
+            ->where(function ($w) use ($needle) {
+                $w->where('first_name', 'LIKE', $needle)
+                    ->orWhere('first_last_name', 'LIKE', $needle)
+                    ->orWhere('second_last_name', 'LIKE', $needle);
+            })
+            ->orderBy('first_name')
+            ->limit(25)
+            ->get()
+            ->map(fn($p) => ['id' => $p->id, 'name' => trim($p->name)]);
+
+        return response()->json($persons);
+    }
+
+
     /**
      * Almacenar la agenda de la visita y actualizar el estado de la solicitud.
      */
@@ -57,18 +93,18 @@ class VisitScheduleController extends Controller
         $validated = $request->validate([
             'visit_request_id'    => 'required|exists:visit_requests,id',
             'person_in_charge_id' => 'nullable|exists:people,id',
-            'activity'           => 'required|string',
-            'date'               => 'nullable|date',
-            'start_time'         => 'required',
-            'end_time'           => 'required',
-            'environment_id'     => 'nullable|exists:environments,id',
-            'observations'       => 'nullable|string',
+            'activity'            => 'required|string',
+            'date'                => 'nullable|date',
+            'start_time'          => 'required',
+            'end_time'            => 'required',
+            'environment_id'      => 'nullable|exists:environments,id',
+            'observations'        => 'nullable|string',
         ]);
 
-        // Crear el cronograma
-        VisitSchedule::create([
-            'visit_request_id'     => $validated['visit_request_id'],
-            'person_in_charge_id'  => $validated['person_in_charge_id'] ?? null,
+        // 1) Crear el schedule
+        $visitSchedule = \Modules\SIGAC\Entities\VisitSchedule::create([
+            'visit_request_id'    => $validated['visit_request_id'],
+            'person_in_charge_id' => $validated['person_in_charge_id'] ?? null,
             'activity'            => $validated['activity'],
             'date'                => $validated['date'] ?? now()->toDateString(),
             'start_time'          => $validated['start_time'],
@@ -77,13 +113,21 @@ class VisitScheduleController extends Controller
             'observations'        => $validated['observations'] ?? null,
         ]);
 
-        // Actualizar el estado de la solicitud a "Agendada"
-        $visitRequest = VisitRequest::findOrFail($validated['visit_request_id']);
+        // 2) Actualizar la solicitud
+        $visitRequest = \Modules\SIGAC\Entities\VisitRequest::findOrFail($validated['visit_request_id']);
         $visitRequest->state = 'Agendada';
         $visitRequest->save();
 
-        return redirect()->route('sigac.academic_coordination.dashboard')->with('success', 'Visita agendada correctamente');
+        // 3) Enviar correo de notificación
+        // (asegúrate de tener creado el mailable App\Mail\VisitScheduledMail)
+        \Illuminate\Support\Facades\Mail::to($visitRequest->contact_email ?? config('mail.from.address'))
+            ->send(new \App\Mail\VisitScheduledMail($visitRequest, $visitSchedule));
+
+        return redirect()
+            ->route('sigac.academic_coordination.dashboard')
+            ->with('success', 'Visita agendada correctamente y correo enviado.');
     }
+
     public function available_environments(Request $request)
     {
         $date       = $request->input('date');
@@ -121,5 +165,178 @@ class VisitScheduleController extends Controller
         return response()->json($available->map(function ($env) {
             return ['id' => $env->id, 'name' => $env->name];
         }));
+    }
+    public function calendar(VisitRequest $request)
+    {
+        // Buscar los agendamientos de esta solicitud
+        $schedules = VisitSchedule::with('environment') // asegúrate de tener relación environment() en el modelo
+            ->where('visit_request_id', $request->id)
+            ->orderBy('date')
+            ->get();
+
+        // Fecha inicial del calendario: la primera fecha agendada, o la fecha de recepción como fallback
+        $initialDate = $schedules->first()->date ?? ($request->date_received ?? now()->toDateString());
+
+        return view('sigac::visitschedule.calendar', [
+            'visitRequest' => $request,
+            'schedules'    => $schedules,
+            'initialDate'  => $initialDate,
+            'titlePage'    => 'Agenda de la solicitud',
+            'titleView'    => 'Agenda de la solicitud',
+        ]);
+    }
+    public function eventsByRequest(VisitRequest $request)
+    {
+        $events = VisitSchedule::with('environment')
+            ->where('visit_request_id', $request->id)
+            ->get()
+            ->map(function ($v) {
+                $env = $v->environment?->name ?? 'Ambiente';
+                return [
+                    'id'    => 'visit-' . $v->id,
+                    'title' => ($v->activity ? $v->activity . ' — ' : '') . $env,
+                    'start' => $v->date . 'T' . $v->start_time,
+                    'end'   => $v->date . 'T' . $v->end_time,
+                    'color' => '#5b9bd5', // azul
+                ];
+            });
+
+        // En VisitScheduleController@eventsByRequest
+        return response()->json(
+            VisitSchedule::with('environment')
+                ->where('visit_request_id', $request->id)
+                ->get()
+                ->map(function ($v) {
+                    return [
+                        'id'    => 'visit-' . $v->id,
+                        'title' => $v->activity ?: 'Visita',
+                        'start' => $v->date . 'T' . $v->start_time,
+                        'end'   => $v->date . 'T' . $v->end_time,
+                        'color' => '#5b9bd5',
+                        'extendedProps' => [
+                            'activity'         => $v->activity,
+                            'environment_name' => $v->environment?->name,
+                        ],
+                    ];
+                })
+        );
+    }
+    public function environment()
+    {
+        return $this->belongsTo(\Modules\SICA\Entities\Environment::class, 'environment_id');
+    }
+    public function calendarAll()
+    {
+        // Vista del calendario general (centrado en hoy)
+        $initialDate = now()->toDateString();
+
+        return view('sigac::visitschedule.calendar_all', [
+            'initialDate' => $initialDate,
+            'titlePage'   => 'Calendario general de visitas',
+            'titleView'   => 'Calendario general de visitas',
+        ]);
+    }
+
+    /**
+     * Feed de eventos para FullCalendar (todas las visitas).
+     * Soporta filtros opcionales por ?from=YYYY-MM-DD&to=YYYY-MM-DD&environment_id=&company=
+     */
+    public function eventsAll(Request $request)
+    {
+        $from = $request->query('from'); // opcional
+        $to   = $request->query('to');   // opcional
+
+        $q = VisitSchedule::query()
+            ->with(['environment', 'visitRequest.company'])
+            ->when($from, fn($qq) => $qq->whereDate('date', '>=', $from))
+            ->when($to,   fn($qq) => $qq->whereDate('date', '<=', $to))
+            ->when($request->query('environment_id'), fn($qq, $envId) => $qq->where('environment_id', $envId))
+            ->when($request->query('company'), function ($qq, $companyName) {
+                $qq->whereHas('visitRequest.company', function ($c) use ($companyName) {
+                    $c->where('name', 'like', "%{$companyName}%");
+                });
+            })
+            ->orderBy('date');
+
+        $events = $q->get()->map(function ($v) {
+            $env = $v->environment?->name ?? 'Ambiente';
+            $comp = $v->visitRequest?->company?->name ?? 'Empresa';
+            $title = trim(($v->activity ?: 'Visita') . ' — ' . $env);
+
+            return [
+                'id'    => 'visit-' . $v->id,
+                'title' => $title,
+                'start' => $v->date . 'T' . $v->start_time,
+                'end'   => $v->date . 'T' . $v->end_time,
+                'color' => '#5b9bd5', // azul
+                'extendedProps' => [
+                    'activity'          => $v->activity,
+                    'environment_name'  => $env,
+                    'company'           => $comp,
+                    'request_id'        => $v->visit_request_id,
+                    'observations'      => $v->observations,
+                    'date'              => $v->date,
+                    'start_time'        => $v->start_time,
+                    'end_time'          => $v->end_time,
+                ],
+            ];
+        });
+
+        return response()->json($events);
+    }
+
+    public function downloadIcs(VisitSchedule $schedule)
+    {
+        $visitRequest = VisitRequest::find($schedule->visit_request_id);
+
+        $summary = 'Visita - ' . optional($visitRequest->company)->name;
+        $description = "Actividad: {$schedule->activity}\n"
+            . "Encargado: " . optional($visitRequest->person)->first_name . "\n"
+            . "Observaciones: " . ($schedule->observations ?? '—');
+
+        $ics = IcsBuilder::singleEvent([
+            'uid'         => "visit-{$schedule->id}@sicefa.local",
+            'summary'     => $summary,
+            'description' => $description,
+            'location'    => optional($schedule->environment)->name ?? 'SENA',
+            'start'       => "{$schedule->date} {$schedule->start_time}",
+            'end'         => "{$schedule->date} {$schedule->end_time}",
+            'organizer'   => config('mail.from.address'),
+            'attendees'   => array_filter([
+                $visitRequest->contact_email ?? null,
+            ]),
+        ]);
+
+        $filename = "visita-{$schedule->id}.ics";
+
+        return new StreamedResponse(function () use ($ics) {
+            echo $ics;
+        }, 200, [
+            'Content-Type'        => 'text/calendar; charset=utf-8',
+            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
+        ]);
+    }
+    public function notify(VisitRequest $visit)
+    {
+        // Busca la agenda más reciente de esta solicitud
+        $schedule = VisitSchedule::where('visit_request_id', $visit->id)
+            ->latest('id')
+            ->first();
+
+        if (!$schedule) {
+            return back()->with('error', 'No hay una agenda asociada a esta solicitud.');
+        }
+
+        if (empty($visit->contact_email)) {
+            return back()->with('error', 'La solicitud no tiene correo de contacto.');
+        }
+
+        try {
+            Mail::to($visit->contact_email)->send(new VisitScheduledMail($visit, $schedule));
+            return back()->with('success', 'Notificación enviada correctamente.');
+        } catch (\Throwable $e) {
+            report($e);
+            return back()->with('error', 'No se pudo enviar el correo. Verifica la configuración de correo.');
+        }
     }
 }

@@ -1424,6 +1424,15 @@ class PermissionsTableSeeder extends Seeder
         ]);
         $permissions_academic_coordination[] = $permission->id;
 
+        // Guardar agenda de visita (Coordinación Académica)
+        $permission = Permission::updateOrCreate(['slug' => 'sigac.academic_coordination.visitschedule.calendar.general'], [
+            'name' => 'Ver agenda de visita (Coordinación Académica)',
+            'description' => 'Permite a la coordinación académica Ver las agenda de la visitas',
+            'description_english' => 'See the training center visit schedule (Academic Coordination)',
+            'app_id' => $app->id,
+        ]);
+        $permissions_academic_coordination[] = $permission->id;
+
 
         // Consulta de ROLES
         $rol_academic_coordination = Role::where('slug', 'sigac.academic_coordinator')->firstOrFail(); // Rol Coordinador Académico
