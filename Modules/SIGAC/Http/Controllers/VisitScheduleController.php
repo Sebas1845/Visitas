@@ -59,29 +59,64 @@ class VisitScheduleController extends Controller
         ]);
     }
 
-    public function searchPersons(Request $request)
+    public function searchStaff(Request $request)
     {
-        $q = (string) $request->input('q', '');
-        if (Str::length(trim($q)) < 2) {
-            return response()->json([]); // mín imo 2 caracteres
+        $q    = trim((string) $request->input('q', ''));
+        $type = $request->input('type', 'all'); // all | employee | contractor
+
+        if (mb_strlen($q) < 2) {
+            return response()->json([]);
         }
 
-        // Normaliza acentos para búsquedas más tolerantes (opcional si tu collation ya maneja acentos)
         $needle = '%' . str_replace(' ', '%', $q) . '%';
 
-        $persons = Person::query()
-            ->select('id', DB::raw("CONCAT_WS(' ', first_name, first_last_name, COALESCE(second_last_name,'')) AS name"))
+        // Empleados (planta): employees.person_id -> people.id
+        $employees = DB::table('employees')
+            ->join('people', 'people.id', '=', 'employees.person_id')
             ->where(function ($w) use ($needle) {
-                $w->where('first_name', 'LIKE', $needle)
-                    ->orWhere('first_last_name', 'LIKE', $needle)
-                    ->orWhere('second_last_name', 'LIKE', $needle);
+                $w->where('people.first_name', 'like', $needle)
+                    ->orWhere('people.first_last_name', 'like', $needle)
+                    ->orWhere('people.second_last_name', 'like', $needle);
             })
-            ->orderBy('first_name')
-            ->limit(25)
-            ->get()
-            ->map(fn($p) => ['id' => $p->id, 'name' => trim($p->name)]);
+            ->select([
+                DB::raw('people.id as person_id'),
+                DB::raw("TRIM(CONCAT_WS(' ', people.first_name, people.first_last_name, COALESCE(people.second_last_name,''))) as name"),
+                DB::raw("'employee' as type"),
+                DB::raw('employees.id as source_id'),
+            ]);
 
-        return response()->json($persons);
+        // Contratistas: contractors.person_id -> people.id
+        $contractors = DB::table('contractors')
+            ->join('people', 'people.id', '=', 'contractors.person_id')
+            ->where(function ($w) use ($needle) {
+                $w->where('people.first_name', 'like', $needle)
+                    ->orWhere('people.first_last_name', 'like', $needle)
+                    ->orWhere('people.second_last_name', 'like', $needle);
+            })
+            ->select([
+                DB::raw('people.id as person_id'),
+                DB::raw("TRIM(CONCAT_WS(' ', people.first_name, people.first_last_name, COALESCE(people.second_last_name,''))) as name"),
+                DB::raw("'contractor' as type"),
+                DB::raw('contractors.id as source_id'),
+            ]);
+
+        // Unificar según filtro
+        if ($type === 'employee') {
+            $union = $employees;
+        } elseif ($type === 'contractor') {
+            $union = $contractors;
+        } else {
+            $union = $employees->unionAll($contractors);
+        }
+
+        // Ordenar y limitar
+        $results = DB::query()
+            ->fromSub($union, 'u')
+            ->orderBy('name')
+            ->limit(25)
+            ->get();
+
+        return response()->json($results);
     }
 
 
@@ -90,15 +125,21 @@ class VisitScheduleController extends Controller
      */
     public function store(Request $request)
     {
+        // mínimo permitido: hoy + 5 días en zona Bogotá
+        $minDate = Carbon::today('America/Bogota')->addDays(5)->toDateString();
+
         $validated = $request->validate([
             'visit_request_id'    => 'required|exists:visit_requests,id',
             'person_in_charge_id' => 'nullable|exists:people,id',
             'activity'            => 'required|string',
-            'date'                => 'nullable|date',
-            'start_time'          => 'required',
-            'end_time'            => 'required',
+            'date'                => ['required', 'date', 'after_or_equal:' . $minDate], // 👈 regla 5 días
+            'start_time'          => ['required', 'date_format:H:i'],
+            'end_time'            => ['required', 'date_format:H:i', 'after:start_time'], // fin > inicio
             'environment_id'      => 'nullable|exists:environments,id',
             'observations'        => 'nullable|string',
+        ], [
+            'date.after_or_equal' => "La fecha debe ser igual o posterior a $minDate.",
+            'end_time.after'      => 'La hora de fin debe ser mayor que la hora de inicio.',
         ]);
 
         // 1) Crear el schedule
@@ -106,7 +147,7 @@ class VisitScheduleController extends Controller
             'visit_request_id'    => $validated['visit_request_id'],
             'person_in_charge_id' => $validated['person_in_charge_id'] ?? null,
             'activity'            => $validated['activity'],
-            'date'                => $validated['date'] ?? now()->toDateString(),
+            'date'                => $validated['date'], // ya es required con regla
             'start_time'          => $validated['start_time'],
             'end_time'            => $validated['end_time'],
             'environment_id'      => $validated['environment_id'] ?? null,
@@ -119,9 +160,9 @@ class VisitScheduleController extends Controller
         $visitRequest->save();
 
         // 3) Enviar correo de notificación
-        // (asegúrate de tener creado el mailable App\Mail\VisitScheduledMail)
-        \Illuminate\Support\Facades\Mail::to($visitRequest->contact_email ?? config('mail.from.address'))
-            ->send(new \App\Mail\VisitScheduledMail($visitRequest, $visitSchedule));
+        \Illuminate\Support\Facades\Mail::to(
+            $visitRequest->contact_email ?? config('mail.from.address')
+        )->send(new \App\Mail\VisitScheduledMail($visitRequest, $visitSchedule));
 
         return redirect()
             ->route('sigac.academic_coordination.dashboard')
@@ -338,5 +379,20 @@ class VisitScheduleController extends Controller
             report($e);
             return back()->with('error', 'No se pudo enviar el correo. Verifica la configuración de correo.');
         }
+    }
+    public function quickReschedule(Request $request, VisitSchedule $schedule)
+    {
+        $minDate = Carbon::today('America/Bogota')->addDays(5)->toDateString();
+
+        $validated = $request->validate([
+            'date'           => ['required', 'date', 'after_or_equal:' . $minDate], // 👈
+            'start_time'     => ['required'],
+            'end_time'       => ['required'],
+            'environment_id' => ['nullable', 'exists:environments,id'],
+        ], [
+            'date.after_or_equal' => "La fecha debe ser igual o posterior a $minDate.",
+        ]);
+
+        // ... resto tal cual (actualizas date, start_time, end_time, etc.)
     }
 }

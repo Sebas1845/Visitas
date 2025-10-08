@@ -309,7 +309,7 @@ Route::middleware(['lang'])->group(function () { //Middleware que permite la int
             Route::get('academic_coordination/visit-schedule/create/{request}', 'create')->name('sigac.academic_coordination.visitschedule.create');
             Route::post('academic_coordination/visit-schedule/store', 'store')->name('sigac.academic_coordination.visitschedule.store');
             Route::post('academic_coordination/visit/environments/search','available_environments')->name('sigac.academic_coordination.visit.environments.search');
-            Route::post('academic_coordination/persons/search','searchPersons')->name('sigac.academic_coordination.persons.search');
+            Route::get('academic_coordination/visit/staff/search', 'searchStaff')->name('sigac.academic_coordination.visit.staff.search');
             Route::get('academic_coordination/visit-schedule/calendar/{request}', 'calendar') ->name('sigac.academic_coordination.visitschedule.calendar');
             Route::get('academic_coordination/visit-schedule/events/{request}', 'eventsByRequest')->name('sigac.academic_coordination.visitschedule.events.byrequest');
             Route::get('academic_coordination/visit-schedule/calendar', 'calendarAll')->name('sigac.academic_coordination.visitschedule.calendar.general');

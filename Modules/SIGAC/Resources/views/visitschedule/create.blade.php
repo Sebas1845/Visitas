@@ -18,30 +18,35 @@
             {!! Form::hidden('visit_request_id', $request->id) !!}
 
             <div class="row">
-                {{-- Encargado: buscador por nombre + select dinámico (vacío al inicio) --}}
-                <div class="col-6 mb-3">
-                    {!! Form::label('person_in_charge_id', 'Encargado') !!}
-
-                    <input type="text" id="person_search" class="form-control form-control-sm mb-2"
-                        placeholder="Buscar encargado por nombre (mín. 2 caracteres)…">
-
-                    {!! Form::select('person_in_charge_id', [], null, [
-                        'class' => 'form-control',
-                        'id' => 'person_in_charge_id',
-                        'placeholder' => 'Escribe para buscar…',
-                        'disabled' => true,
-                    ]) !!}
-
-                    <small id="person_helper" class="form-text text-muted">
-                        Empieza a escribir el nombre para buscar.
-                    </small>
+                {{-- Encargado (unificado: empleados + contratistas) --}}
+                <div class="mb-3">
+                    <label class="form-label">Encargado</label>
+                    <div class="row g-2">
+                        <div class="col-md-3">
+                            <select id="staffType" class="form-select">
+                                <option value="all">Todos</option>
+                                <option value="employee">Planta</option>
+                                <option value="contractor">Contratista</option>
+                            </select>
+                        </div>
+                        <div class="col-md-9">
+                            <input type="text" id="staffSearch" class="form-control"
+                                placeholder="Buscar por nombre o apellido..." autocomplete="off">
+                            <input type="hidden" name="person_in_charge_id" id="personInChargeId">
+                            <div id="staffResults" class="list-group mt-2"></div>
+                        </div>
+                    </div>
+                    <div class="form-text">Escribe al menos 2 caracteres y selecciona una persona.</div>
                 </div>
-
 
                 <div class="col-6 mb-3">
                     {!! Form::label('activity', 'Actividad a realizar') !!}
-                    {!! Form::text('activity', null, ['class' => 'form-control', 'list' => 'activities', 'required']) !!}
-
+                    {!! Form::text('activity', null, [
+                        'class' => 'form-control',
+                        'list' => 'activities',
+                        'required',
+                        'id' => 'activity',
+                    ]) !!}
                     <datalist id="activities">
                         @foreach ($activities as $activity)
                             <option value="{{ $activity }}"></option>
@@ -51,9 +56,20 @@
             </div>
 
             <div class="row">
+                @php
+                    $minDate = \Carbon\Carbon::today('America/Bogota')->addDays(5)->toDateString();
+                @endphp
+
                 <div class="col-4 mb-3">
                     {!! Form::label('date', 'Fecha') !!}
-                    {!! Form::date('date', \Carbon\Carbon::now(), ['class' => 'form-control', 'id' => 'date']) !!}
+                    {!! Form::date('date', $minDate, [
+                        'class' => 'form-control',
+                        'id' => 'date',
+                        'required' => true,
+                        'min' => $minDate, // 👈 mínimo en el input
+                    ]) !!}
+                    <small class="text-muted">Solo se permite agendar a partir de {{ $minDate }} (5 días desde
+                        hoy).</small>
                 </div>
 
                 <div class="col-4 mb-3">
@@ -67,14 +83,19 @@
                 </div>
             </div>
 
+            {{-- Ambiente (opcional) --}}
             <div class="form-group mb-2">
-                {!! Form::label('environment_id', 'Ambiente disponible') !!}
+                {!! Form::label('environment_id', 'Ambiente (opcional)') !!}
                 {!! Form::select('environment_id', [], null, [
                     'class' => 'form-control',
                     'id' => 'environment_id',
                     'placeholder' => 'Seleccione fecha y horas para cargar ambientes...',
                     'disabled' => true,
                 ]) !!}
+                <div class="form-check mt-2">
+                    <input class="form-check-input" type="checkbox" id="no_env" checked>
+                    <label class="form-check-label" for="no_env">No asignar ambiente por ahora</label>
+                </div>
                 <small id="env-helper" class="form-text text-muted"></small>
             </div>
 
@@ -92,159 +113,147 @@
     </div>
 
     <script>
+        // ===================== Encargado (buscador unificado) =====================
         (function() {
-            const personInput = document.getElementById('person_search');
-            const personSelect = document.getElementById('person_in_charge_id');
-            const personHelper = document.getElementById('person_helper');
-            const token = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
-            const urlPersons = "{{ route('sigac.academic_coordination.persons.search') }}";
+            const search = document.getElementById('staffSearch');
+            const typeSel = document.getElementById('staffType');
+            const results = document.getElementById('staffResults');
+            const hiddenId = document.getElementById('personInChargeId');
 
-            let lastController = null;
-            let debounceTimer = null;
+            let timer;
 
-            function setPersonLoading(state) {
-                personSelect.innerHTML = '';
-                personSelect.disabled = true;
-
-                const opt = document.createElement('option');
-                opt.value = '';
-                opt.textContent = state ? 'Buscando…' : 'Escribe para buscar…';
-                personSelect.appendChild(opt);
-
-                personHelper.textContent = state ?
-                    'Buscando encargados…' :
-                    'Empieza a escribir el nombre para buscar.';
-            }
-
-            function renderPersons(list) {
-                personSelect.innerHTML = '';
-                if (!Array.isArray(list) || list.length === 0) {
-                    const o = document.createElement('option');
-                    o.value = '';
-                    o.textContent = '-- Sin resultados --';
-                    personSelect.appendChild(o);
-                    personSelect.disabled = true;
-                    personHelper.textContent = 'No se encontraron coincidencias.';
-                    return;
-                }
-
-                const ph = document.createElement('option');
-                ph.value = '';
-                ph.textContent = 'Seleccione un encargado…';
-                personSelect.appendChild(ph);
-
-                list.forEach(p => {
-                    const opt = document.createElement('option');
-                    opt.value = p.id;
-                    opt.textContent = p.name;
-                    personSelect.appendChild(opt);
-                });
-
-                personSelect.disabled = false;
-                personHelper.textContent = `${list.length} resultado(s).`;
-            }
-
-            async function searchPersons(q) {
-                // Cancela petición anterior si aún está en curso
-                if (lastController) lastController.abort();
-                lastController = new AbortController();
-
-                try {
-                    const res = await fetch(urlPersons, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'X-CSRF-TOKEN': token
-                        },
-                        body: JSON.stringify({
-                            q
-                        }),
-                        signal: lastController.signal
-                    });
-
-                    if (!res.ok) throw new Error('HTTP ' + res.status);
-                    const data = await res.json();
-                    renderPersons(data);
-                } catch (e) {
-                    if (e.name === 'AbortError') return; // fue cancelado por una nueva búsqueda
-                    personSelect.innerHTML = '';
-                    const o = document.createElement('option');
-                    o.value = '';
-                    o.textContent = '-- Error al buscar --';
-                    personSelect.appendChild(o);
-                    personSelect.disabled = true;
-                    personHelper.textContent = 'No se pudo completar la búsqueda. Intente de nuevo.';
-                }
-            }
-
-            personInput.addEventListener('input', () => {
-                const q = personInput.value.trim();
+            function doSearch() {
+                const q = search.value.trim();
+                const type = typeSel.value;
                 if (q.length < 2) {
-                    setPersonLoading(false);
+                    results.innerHTML = '';
                     return;
                 }
 
-                setPersonLoading(true);
+                fetch(
+                        `{{ route('sigac.academic_coordination.visit.staff.search') }}?q=${encodeURIComponent(q)}&type=${encodeURIComponent(type)}`
+                        )
+                    .then(r => r.json())
+                    .then(items => {
+                        results.innerHTML = items.map(it => `
+                          <button type="button" class="list-group-item list-group-item-action d-flex justify-content-between align-items-center" data-id="${it.person_id}" data-name="${it.name}" data-type="${it.type}">
+                            <span>${it.name}</span>
+                            <span class="badge ${it.type === 'employee' ? 'bg-success' : 'bg-warning text-dark'}">
+                              ${it.type === 'employee' ? 'Planta' : 'Contratista'}
+                            </span>
+                          </button>
+                        `).join('');
 
-                // debounce 300 ms
-                clearTimeout(debounceTimer);
-                debounceTimer = setTimeout(() => {
-                    searchPersons(q);
-                }, 300);
+                        results.querySelectorAll('button').forEach(btn => {
+                            btn.addEventListener('click', () => {
+                                hiddenId.value = btn.dataset.id; // people.id
+                                const label =
+                                    `${btn.dataset.name} ${btn.dataset.type==='employee'?'(Planta)':'(Contratista)'}`;
+                                search.value = label;
+                                results.innerHTML = '';
+                                validateReady();
+                            });
+                        });
+                    })
+                    .catch(() => {
+                        results.innerHTML = '';
+                    });
+            }
+
+            search.addEventListener('input', () => {
+                clearTimeout(timer);
+                timer = setTimeout(doSearch, 250);
             });
-
-            // Estado inicial
-            setPersonLoading(false);
+            typeSel.addEventListener('change', doSearch);
         })();
 
 
+        // ===================== Ambientes (OPCIONAL) + Validación de envío =====================
         (function() {
             const date = document.getElementById('date');
             const startTime = document.getElementById('start_time');
             const endTime = document.getElementById('end_time');
             const envSelect = document.getElementById('environment_id');
+            const noEnvCB = document.getElementById('no_env');
             const submitBtn = document.getElementById('submitBtn');
             const helper = document.getElementById('env-helper');
-            const token = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
+            const activity = document.getElementById('activity');
+            const form = document.getElementById('visit-form');
 
+            // CSRF para fetch (fallback a input oculto si no hay meta)
+            let token = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
+            if (!token) {
+                const hidden = document.querySelector('input[name="_token"]');
+                if (hidden) token = hidden.value;
+            }
             const url = "{{ route('sigac.academic_coordination.visit.environments.search') }}";
+
+            function validateReady() {
+                // Requisitos mínimos para permitir enviar
+                const baseOk = activity.value.trim() && date.value && startTime.value && endTime.value && (startTime
+                    .value < endTime.value);
+                const envOk = noEnvCB.checked ? true : !!envSelect.value;
+
+                submitBtn.disabled = !(baseOk && envOk);
+            }
+
+            function toggleEnvDisabled() {
+                if (noEnvCB.checked) {
+                    envSelect.value = '';
+                    envSelect.setAttribute('disabled', 'disabled');
+                    helper.textContent = 'El ambiente se puede asignar después.';
+                } else {
+                    envSelect.removeAttribute('disabled');
+                    helper.textContent = 'Seleccione un ambiente disponible (o marque "No asignar" para omitir).';
+                    // Si ya hay fecha/horas, actualiza lista
+                    if (date.value && startTime.value && endTime.value && startTime.value < endTime.value) {
+                        fetchEnvironments();
+                    }
+                }
+                validateReady();
+            }
 
             function setLoading(state) {
                 if (state) {
                     envSelect.innerHTML = '';
                     envSelect.disabled = true;
-                    submitBtn.disabled = true;
                     helper.textContent = 'Cargando ambientes disponibles...';
-                } else {
-                    helper.textContent = '';
+                } else if (!noEnvCB.checked) {
+                    envSelect.disabled = false;
+                    helper.textContent = 'Seleccione un ambiente disponible (o marque "No asignar" para omitir).';
                 }
             }
 
             function setEmpty(msg = 'No hay ambientes disponibles para el rango seleccionado.') {
                 envSelect.innerHTML = '';
-                const opt = document.createElement('option');
-                opt.value = '';
-                opt.textContent = '-- ' + msg + ' --';
-                envSelect.appendChild(opt);
-                envSelect.value = '';
-                envSelect.disabled = true;
-                submitBtn.disabled = true;
-                helper.textContent = msg;
+                const optNone = document.createElement('option');
+                optNone.value = '';
+                optNone.textContent = '(Asignar después)';
+                envSelect.appendChild(optNone);
+                // no deshabilites si noEnvCB está apagado; deja elegir "(Asignar después)"
+                if (!noEnvCB.checked) envSelect.disabled = false;
+                helper.textContent = msg + ' También puedes dejar "(Asignar después)".';
+                validateReady();
             }
 
             async function fetchEnvironments() {
-                const d = date.value;
-                const s = startTime.value;
-                const e = endTime.value;
+                // Si marcaron "No asignar", no consultes
+                if (noEnvCB.checked) {
+                    validateReady();
+                    return;
+                }
 
-                // Validaciones mínimas antes de consultar
+                const d = date.value,
+                    s = startTime.value,
+                    e = endTime.value;
+
                 if (!d || !s || !e) {
                     setEmpty('Seleccione fecha y horas para consultar.');
-                    return;
+                    return validateReady();
                 }
                 if (s >= e) {
                     setEmpty('La hora de inicio debe ser menor a la hora de fin.');
-                    return;
+                    return validateReady();
                 }
 
                 setLoading(true);
@@ -263,53 +272,97 @@
                         })
                     });
 
-                    if (!res.ok) {
-                        throw new Error('Error de servidor ' + res.status);
-                    }
+                    if (!res.ok) throw new Error('Error de servidor ' + res.status);
 
                     const data = await res.json(); // [{id, name}, ...]
                     envSelect.innerHTML = '';
 
-                    if (!Array.isArray(data) || data.length === 0) {
-                        setEmpty();
-                        return;
+                    // Siempre ofrece "(Asignar después)"
+                    const optNone = document.createElement('option');
+                    optNone.value = '';
+                    optNone.textContent = '(Asignar después)';
+                    envSelect.appendChild(optNone);
+
+                    if (Array.isArray(data) && data.length) {
+                        data.forEach(env => {
+                            const opt = document.createElement('option');
+                            opt.value = env.id;
+                            opt.textContent = env.name;
+                            envSelect.appendChild(opt);
+                        });
+                        envSelect.disabled = false;
+                        helper.textContent =
+                            'Ambientes libres para la fecha y rango. También puedes dejar "(Asignar después)".';
+                    } else {
+                        helper.textContent = 'No hay ambientes libres. Puedes dejar "(Asignar después)".';
+                        envSelect.disabled = false;
                     }
-
-                    // placeholder
-                    const ph = document.createElement('option');
-                    ph.value = '';
-                    ph.textContent = 'Seleccione un ambiente disponible...';
-                    envSelect.appendChild(ph);
-
-                    data.forEach(env => {
-                        const opt = document.createElement('option');
-                        opt.value = env.id;
-                        opt.textContent = env.name;
-                        envSelect.appendChild(opt);
-                    });
-
-                    envSelect.disabled = false;
-                    submitBtn.disabled = true; // hasta que elija uno
-                    helper.textContent =
-                        'Solo se listan ambientes libres para la fecha y el rango horario indicados.';
                 } catch (err) {
                     console.error(err);
-                    setEmpty('No se pudieron cargar los ambientes. Intente de nuevo.');
+                    setEmpty('No se pudieron cargar los ambientes. Puedes dejar "(Asignar después)".');
                 } finally {
                     setLoading(false);
+                    validateReady();
                 }
             }
 
-            // Cambios que disparan la búsqueda
-            [date, startTime, endTime].forEach(el => el.addEventListener('change', fetchEnvironments));
+            // Eventos
+            [date, startTime, endTime, activity].forEach(el => el.addEventListener('change', () => {
+                fetchEnvironments();
+                validateReady();
+            }));
+            envSelect.addEventListener('change', validateReady);
+            noEnvCB.addEventListener('change', toggleEnvDisabled);
 
-            // Habilitar submit solo si hay selección válida
-            envSelect.addEventListener('change', () => {
-                submitBtn.disabled = !(envSelect.value && envSelect.value !== '');
+            // Validación también al enviar
+            form.addEventListener('submit', (e) => {
+                if (submitBtn.disabled) e.preventDefault();
             });
 
-            // Consulta inicial (opcional): si tienes ya valores pre-cargados
-            // fetchEnvironments();
+            // Estado inicial
+            toggleEnvDisabled();
+            validateReady();
+        })();
+
+        (function() {
+            const date = document.getElementById('date');
+            const startTime = document.getElementById('start_time');
+            const endTime = document.getElementById('end_time');
+            const envSelect = document.getElementById('environment_id');
+            const noEnvCB = document.getElementById('no_env');
+            const submitBtn = document.getElementById('submitBtn');
+            const helper = document.getElementById('env-helper');
+            const activity = document.getElementById('activity');
+            const form = document.getElementById('visit-form');
+
+            // 👇 mínimo: hoy + 5 días (desde el servidor)
+            const MIN_DATE = '{{ $minDate }}';
+
+            function isDateValidMin() {
+                return date.value && date.value >= MIN_DATE;
+            }
+
+            function validateReady() {
+                const baseOk = activity.value.trim() &&
+                    date.value &&
+                    isDateValidMin() &&
+                    startTime.value && endTime.value &&
+                    (startTime.value < endTime.value);
+
+                const envOk = noEnvCB.checked ? true : !!envSelect.value;
+
+                submitBtn.disabled = !(baseOk && envOk);
+            }
+
+            // Si el usuario intenta poner una fecha menor, la corrige al mínimo
+            date.addEventListener('change', () => {
+                if (date.value && date.value < MIN_DATE) {
+                    date.value = MIN_DATE;
+                }
+                validateReady();
+            });
+
+            // ... tu resto (fetch de ambientes, toggle checkbox, etc.)
         })();
     </script>
 @endsection
