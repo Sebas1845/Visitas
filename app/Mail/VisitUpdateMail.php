@@ -14,8 +14,8 @@ class VisitUpdateMail extends Mailable
 
     public $visitRequest;
     public $schedule;
-    public $event;    // created|updated|canceled
-    public $changed;  // array con detalles
+    public $event;      // 'created' | 'updated' | 'canceled'
+    public $changed;    // array con detalles de cambios
     public $googleAddUrl;
     public $icsContent;
     public $invitationUrl;
@@ -29,11 +29,11 @@ class VisitUpdateMail extends Mailable
 
         $summary = 'Visita - ' . optional($visitRequest->company)->name;
         $description = "Actividad: {$schedule->activity}\n"
-                     . "Encargado: " . (optional($schedule->person)->first_name ?? 'N/D') . "\n"
-                     . "Observaciones: " . ($schedule->observations ?? '—');
+             . "Encargado: " . (optional($schedule->personInCharge)->first_name ?? 'N/D') . "\n"
+             . "Observaciones: " . ($schedule->observations ?? '—');
         $location = optional($schedule->environment)->name ?? 'Por definir';
 
-        // .ics
+        // .ICS adjunto
         $this->icsContent = IcsBuilder::singleEvent([
             'uid'         => "visit-{$schedule->id}@sicefa.local",
             'summary'     => $summary,
@@ -45,7 +45,7 @@ class VisitUpdateMail extends Mailable
             'attendees'   => array_filter([$visitRequest->contact_email ?? null]),
         ]);
 
-        // Google Calendar URL (opcional)
+        // Google Calendar (opcional)
         $startUtc = Carbon::parse("{$schedule->date} {$schedule->start_time}", 'America/Bogota')->utc()->format('Ymd\THis\Z');
         $endUtc   = Carbon::parse("{$schedule->date} {$schedule->end_time}", 'America/Bogota')->utc()->format('Ymd\THis\Z');
         $this->googleAddUrl = 'https://calendar.google.com/calendar/render?action=TEMPLATE'
@@ -55,8 +55,8 @@ class VisitUpdateMail extends Mailable
             . '&location=' . urlencode($location)
             . '&sf=true&output=xml';
 
-        // Invitación (tu ruta pública firmada)
-        $this->invitationUrl = route('sigac.visits.invitation', $schedule); // si la tienes firmada, usa signedRoute
+        // Link a invitación (tu vista pública de invitación)
+        $this->invitationUrl = route('sigac.visits.invitation', $schedule);
     }
 
     public function build()
@@ -68,11 +68,9 @@ class VisitUpdateMail extends Mailable
             default    => 'Actualización de visita',
         } . ' - ' . (optional($this->visitRequest->company)->name ?? 'SICEFA');
 
-        $filename = "visita-{$this->schedule->id}.ics";
-
         return $this->subject($subject)
-            ->view('emails.visit_update') // 👈 crea esta vista
-            ->attachData($this->icsContent, $filename, [
+            ->view('emails.visit_update')
+            ->attachData($this->icsContent, "visita-{$this->schedule->id}.ics", [
                 'mime' => 'text/calendar; charset=utf-8',
             ]);
     }

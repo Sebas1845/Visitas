@@ -46,7 +46,7 @@ class VisitSchedule extends Model implements Auditable
     /**
      * Relación con la persona encargada de la visita
      */
-    public function personInCharge()
+    public function person()
     {
         return $this->belongsTo(Person::class, 'person_in_charge_id');
     }
